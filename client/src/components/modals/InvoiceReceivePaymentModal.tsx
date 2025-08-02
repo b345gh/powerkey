@@ -1,6 +1,5 @@
-// In InvoiceReceivePaymentModal.tsx
 import React, { useState, useEffect } from 'react';
-import { useParams, useLocation, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useCompany } from '../../contexts/CompanyContext';
 import axiosInstance from '../../axiosInstance';
 import { X, DollarSign } from 'lucide-react';
@@ -28,8 +27,7 @@ interface Payment {
 }
 
 const InvoiceReceivePaymentModal: React.FC = () => {
-  const { customerId } = useParams<{ customerId: string }>(); // Extract customerId from URL
-  const { state } = useLocation();
+  const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
   const { selectedCompany } = useCompany();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -57,14 +55,40 @@ const InvoiceReceivePaymentModal: React.FC = () => {
       }
 
       try {
-        const response = await axiosInstance.get(
-          `/api/getInvoicesByCustomer/${customerId}/${selectedCompany.company_id}`
-        );
-        if (response.data.length === 0) {
-          setError('No invoices found for this customer');
+        // Record payment for each invoice based on the payment amount
+        const totalOutstanding = invoices.reduce((sum, inv) => sum + inv.balance_due, 0);
+        const paymentAmount = parseFloat(payment.payment_amount.toString());
+        
+        if (paymentAmount > totalOutstanding) {
+          alert('Payment amount cannot exceed total outstanding balance');
+          return;
+        }
+
+        // Distribute payment across invoices (FIFO - oldest first)
+        let remainingPayment = paymentAmount;
+        const invoicePayments = [];
+        
+        for (const invoice of invoices.sort((a, b) => new Date(a.invoice_date).getTime() - new Date(b.invoice_date).getTime())) {
+          if (remainingPayment <= 0) break;
+          
+          const paymentForThisInvoice = Math.min(remainingPayment, invoice.balance_due);
+          if (paymentForThisInvoice > 0) {
+            invoicePayments.push({
+              invoice_id: invoice.id,
+              payment_amount: paymentForThisInvoice
+            });
+            remainingPayment -= paymentForThisInvoice;
+          }
+        }
+
+        await axiosInstance.post(`/api/recordPayment/${selectedCompany.company_id}/${customerId}`, {
+          ...payment,
+          customer_id: customerId,
+          invoice_payments: invoicePayments
+        });
         } else {
           setInvoices(response.data);
-        }
+        navigate('/dashboard/invoices');
       } catch (error) {
         console.error('Error fetching invoices:', error);
         setError('Failed to fetch invoices. Please try again later.');
@@ -119,13 +143,13 @@ const InvoiceReceivePaymentModal: React.FC = () => {
         <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-gray-900">Error</h2>
-            <button onClick={() => navigate('/invoices')} className="text-gray-600 hover:text-gray-900">
+            <button onClick={() => navigate('/dashboard/invoices')} className="text-gray-600 hover:text-gray-900">
               <X className="h-6 w-6" />
             </button>
           </div>
           <p className="text-red-600">{error}</p>
           <div className="flex justify-end mt-4">
-            <button onClick={() => navigate('/invoices')} className="btn btn-secondary">
+            <button onClick={() => navigate('/dashboard/invoices')} className="btn btn-secondary">
               Back to Invoices
             </button>
           </div>
@@ -139,7 +163,7 @@ const InvoiceReceivePaymentModal: React.FC = () => {
       <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold text-gray-900">Record Payment</h2>
-          <button onClick={() => navigate('/invoices')} className="text-gray-600 hover:text-gray-900">
+          <button onClick={() => navigate('/dashboard/invoices')} className="text-gray-600 hover:text-gray-900">
             <X className="h-6 w-6" />
           </button>
         </div>
@@ -269,7 +293,7 @@ const InvoiceReceivePaymentModal: React.FC = () => {
             />
           </div>
           <div className="flex justify-end space-x-2">
-            <button type="button" onClick={() => navigate('/invoices')} className="btn btn-secondary">
+            <button type="button" onClick={() => navigate('/dashboard/invoices')} className="btn btn-secondary">
               Cancel
             </button>
             <button type="submit" className="btn btn-primary">
